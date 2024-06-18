@@ -33,8 +33,11 @@ uart_t *uart_new(const char *name, int is_console) {
 	return u;
 }
 
+#define ANSI_BOLD   "\033[1m"
+#define ANSI_NORMAL "\033[0m"
+
 void uart_console_printc(char val) {
-	printf("%c", val);
+	printf("%s%c%s", ANSI_BOLD, val, ANSI_NORMAL);
 }
 
 #define REG_CMD 0
