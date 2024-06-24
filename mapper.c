@@ -25,29 +25,29 @@ to 32MiB of physical RAM.
 
 */
 
+//Note: on write of 32-bit, first word is msb and second word is lsb
 typedef struct {
-	uint16_t w0;
-	uint16_t w1;
+	uint16_t upper_word;
+	uint16_t lower_word;
 } desc_t;
 
-#define SYS_ENTRY_START 2048
-
-//Note: on write of 32-bit, w0 is msb and w1 lsb
+#define NUM_PAGE_ENTRIES 4096
+#define SYS_ENTRY_START  (NUM_PAGE_ENTRIES/2)
 
 //Note the RWX bits *disable* that access when 1.
-#define W1_R 0x8000
-#define W1_W 0x4000
-#define W1_X 0x2000
-#define W1_PAGE_MASK 0x1FFF
+#define LOWER_WORD_R 0x8000
+#define LOWER_WORD_W 0x4000
+#define LOWER_WORD_X 0x2000
+#define LOWER_WORD_PAGE_MASK 0x1FFF
 
-#define W0_REFD 0x2
-#define W0_ALTRD 0x1
-#define W0_UID_SHIFT 8
-#define W0_UID_MASK 0xff
+#define UPPER_WORD_REFD 0x2
+#define UPPER_WORD_ALTRD 0x1
+#define UPPER_WORD_UID_SHIFT 8
+#define UPPER_WORD_UID_MASK 0xff
 
 struct mapper_t {
 	//2K entries for usr, 2K for sys
-	desc_t desc[4096];
+	desc_t desc[NUM_PAGE_ENTRIES];
 	uint8_t *physram;
 	int physram_size;
 	int sysmode; //indicates if next accesses are in sysmode or not
@@ -61,18 +61,18 @@ void mapper_set_mapid(mapper_t *m, uint8_t id) {
 
 //returns fault indicator, or 0 if allowed
 static int access_allowed_page(mapper_t *m, unsigned int page, int access_flags) {
-	assert(page<4096);
-	unsigned int ac=(m->desc[page].w1<<16)+m->desc[page].w0;
+	assert(page<NUM_PAGE_ENTRIES);
+	unsigned int ac=(m->desc[page].lower_word<<16)+m->desc[page].upper_word;
 	int fault=(ac&access_flags)&(ACCESS_R|ACCESS_W|ACCESS_X);
-	int uid=(ac>>W0_UID_SHIFT)&W0_UID_MASK;
+	int uid=(ac>>UPPER_WORD_UID_SHIFT)&UPPER_WORD_UID_MASK;
 	if ((access_flags&ACCESS_SYSTEM)==0) {
 		if (uid != m->cur_id) fault=(uid<<8|0xff);
 	}
 	if (fault) {
 		MAPPER_LOG_DEBUG("Mapper: Access fault: page ent %x req %x, fault %x (", ac, access_flags, fault);
-		if (fault&(W1_W<<16)) MAPPER_LOG_DEBUG("write violation ");
-		if (fault&(W1_R<<16)) MAPPER_LOG_DEBUG("read violation ");
-		if (fault&(W1_X<<16)) MAPPER_LOG_DEBUG("execute violation ");
+		if (fault&(LOWER_WORD_W<<16)) MAPPER_LOG_DEBUG("write violation ");
+		if (fault&(LOWER_WORD_R<<16)) MAPPER_LOG_DEBUG("read violation ");
+		if (fault&(LOWER_WORD_X<<16)) MAPPER_LOG_DEBUG("execute violation ");
 		if (fault&0xff00) MAPPER_LOG_DEBUG("proc uid %d page uid %d ", m->cur_id, uid);
 		MAPPER_LOG_DEBUG(")\n");
 	}
@@ -91,8 +91,8 @@ int mapper_access_allowed(mapper_t *m, unsigned int a, int access_flags) {
 	}
 	//Map virtual page to phyical page.
 	int p=a>>12; //4K pages
-	assert(p<=2048 && "out of range addr");
-	if (access_flags&ACCESS_SYSTEM) p+=2048;
+	assert(p<=SYS_ENTRY_START && "out of range addr");
+	if (access_flags&ACCESS_SYSTEM) p+=SYS_ENTRY_START;
 	int r=access_allowed_page(m, p, access_flags);
 	if (r && log_level_active(LOG_SRC_MAPPER, LOG_DEBUG)) {
 		MAPPER_LOG_DEBUG("Mapper: Access fault at addr %x page %d. CPU state:\n", a, p);
@@ -113,11 +113,12 @@ void mapper_write16(void *obj, unsigned int a, unsigned int val) {
 	mapper_t *m=(mapper_t*)obj;
 	a=a/2; //word addr
 	if (a&1) {
-		m->desc[a/2].w1=val;
+		m->desc[a/2].lower_word=val;
 	} else {
-		m->desc[a/2].w0=val;
+		m->desc[a/2].upper_word=val;
 	}
-	if (a/2==2048) MAPPER_LOG_DEBUG("write page %d, w%d. w0=%x, w1=%x\n", a/2, a&1, m->desc[a/2].w0, m->desc[a/2].w1);
+	// XXX: too many divide by 2?
+	if (a/2==2048) MAPPER_LOG_DEBUG("write page %d, w%d. upper_word=%x, lower_word=%x\n", a/2, a&1, m->desc[a/2].upper_word, m->desc[a/2].lower_word);
 }
 
 void mapper_write32(void *obj, unsigned int a, unsigned int val) {
@@ -129,11 +130,12 @@ void mapper_write32(void *obj, unsigned int a, unsigned int val) {
 unsigned int mapper_read16(void *obj, unsigned int a) {
 	mapper_t *m=(mapper_t*)obj;
 	a=a/2; //word addr
-	if (a/2==2048) MAPPER_LOG_DEBUG("read page %d, w%d. w0=%x, w1=%x\n", a/2, a&1, m->desc[a/2].w0, m->desc[a/2].w1);
+	// XXX: too many divide by 2?
+	if (a/2==2048) MAPPER_LOG_DEBUG("read page %d, w%d. upper_word=%x, lower_word=%x\n", a/2, a&1, m->desc[a/2].upper_word, m->desc[a/2].lower_word);
 	if (a&1) {
-		return m->desc[a/2].w1;
+		return m->desc[a/2].lower_word;
 	} else {
-		return m->desc[a/2].w0;
+		return m->desc[a/2].upper_word;
 	}
 }
 
@@ -167,13 +169,13 @@ void mapper_set_sysmode(mapper_t *m, int cpu_in_sysmode) {
 int do_map(mapper_t *m, unsigned int a, unsigned int is_write) {
 	//Map virtual page to phyical page.
 	int p=a>>12; //4K pages
-	assert(p<2048);
+	assert(p<SYS_ENTRY_START);
 	if (m->sysmode) p+=SYS_ENTRY_START;
 
-	m->desc[p].w0|=W0_REFD;
-	if (is_write) m->desc[p].w0|=W0_ALTRD;
+	m->desc[p].upper_word|=UPPER_WORD_REFD;
+	if (is_write) m->desc[p].upper_word|=UPPER_WORD_ALTRD;
 
-	int phys_p=m->desc[p].w1&W1_PAGE_MASK;
+	int phys_p=m->desc[p].lower_word&LOWER_WORD_PAGE_MASK;
 	int phys=(a&0xFFF)|(phys_p<<12);
 	phys&=((8*1024*1024)-1);
 //	assert(phys<8*1024*1024);
