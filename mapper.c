@@ -61,14 +61,13 @@ void mapper_set_mapid(mapper_t *m, uint8_t id) {
 //returns fault indicator, or 0 if allowed
 static int access_allowed_page(mapper_t *m, unsigned int page, int access_flags) {
 	assert(page<NUM_PAGE_ENTRIES);
-	unsigned int ac=(m->desc[page].lower_word<<16)+m->desc[page].upper_word;
-	int fault=(ac&access_flags)&(ACCESS_R|ACCESS_W|ACCESS_X);
-	int uid=(ac>>UPPER_WORD_UID_SHIFT)&UPPER_WORD_UID_MASK;
+	int fault=(m->desc[page].lower_word&access_flags)&(ACCESS_R|ACCESS_W|ACCESS_X);
+	int uid=(m->desc[page].upper_word>>UPPER_WORD_UID_SHIFT)&UPPER_WORD_UID_MASK;
 	if ((access_flags&ACCESS_SYSTEM)==0) {
 		if (uid != m->cur_id) fault=(uid<<8|0xff);
 	}
 	if (fault) {
-		MAPPER_LOG_DEBUG("Mapper: Access fault: page ent %x req %x, fault %x (", ac, access_flags, fault);
+		MAPPER_LOG_DEBUG("Mapper: Access fault: page ent %x%x req %x, fault %x (", m->desc[page].upper_word, m->desc[page].lower_word, access_flags, fault);
 		if (fault&ACCESS_W) MAPPER_LOG_DEBUG("write violation ");
 		if (fault&ACCESS_R) MAPPER_LOG_DEBUG("read violation ");
 		if (fault&ACCESS_X) MAPPER_LOG_DEBUG("execute violation ");
