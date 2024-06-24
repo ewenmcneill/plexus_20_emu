@@ -23,9 +23,12 @@ a page size of 4K.
 We have space for 8K physical pages; this means we could map
 to 32MiB of physical RAM.
 
+On read/write of 32-bit, first word is msb and second word is lsb,
+since this is a big endian CPU.
+
+Note that the RWX bits *disable* that access when 1, ie 0 = not blocked.
 */
 
-//Note: on write of 32-bit, first word is msb and second word is lsb
 typedef struct {
 	uint16_t upper_word;
 	uint16_t lower_word;
@@ -34,10 +37,6 @@ typedef struct {
 #define NUM_PAGE_ENTRIES 4096
 #define SYS_ENTRY_START  (NUM_PAGE_ENTRIES/2)
 
-//Note the RWX bits *disable* that access when 1.
-#define LOWER_WORD_R 0x8000
-#define LOWER_WORD_W 0x4000
-#define LOWER_WORD_X 0x2000
 #define LOWER_WORD_PAGE_MASK 0x1FFF
 
 #define UPPER_WORD_REFD 0x2
@@ -70,9 +69,9 @@ static int access_allowed_page(mapper_t *m, unsigned int page, int access_flags)
 	}
 	if (fault) {
 		MAPPER_LOG_DEBUG("Mapper: Access fault: page ent %x req %x, fault %x (", ac, access_flags, fault);
-		if (fault&(LOWER_WORD_W<<16)) MAPPER_LOG_DEBUG("write violation ");
-		if (fault&(LOWER_WORD_R<<16)) MAPPER_LOG_DEBUG("read violation ");
-		if (fault&(LOWER_WORD_X<<16)) MAPPER_LOG_DEBUG("execute violation ");
+		if (fault&ACCESS_W) MAPPER_LOG_DEBUG("write violation ");
+		if (fault&ACCESS_R) MAPPER_LOG_DEBUG("read violation ");
+		if (fault&ACCESS_X) MAPPER_LOG_DEBUG("execute violation ");
 		if (fault&0xff00) MAPPER_LOG_DEBUG("proc uid %d page uid %d ", m->cur_id, uid);
 		MAPPER_LOG_DEBUG(")\n");
 	}
